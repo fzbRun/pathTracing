@@ -359,7 +359,8 @@ private:
 
 		//使用assimp
 		uint32_t index = 0;
-		my_model = std::make_unique<myModel>("models/CornellBox-Original.obj");	//给绝对路径读不到，给相对路径能读到
+		//my_model = std::make_unique<myModel>("models/CornellBox-Original.obj");	//给绝对路径读不到，给相对路径能读到
+		my_model = std::make_unique<myModel>("models/bear_box.obj");
 		if (my_model->meshs.size() == 0) {
 			throw std::runtime_error("failed to create model!");
 		}

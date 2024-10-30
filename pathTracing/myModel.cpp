@@ -3,8 +3,8 @@
 myModel::myModel(std::string path) {
 	loadModel(path);
 	simplify();
-	//optimize();
-	//modelChange();
+	optimize();
+	modelChange();
 	makeAABB();
 }
 
@@ -100,7 +100,7 @@ Mesh myModel::processMesh(aiMesh* mesh, const aiScene* scene) {
 		aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
 		aiColor3D color;
 		material->Get(AI_MATKEY_COLOR_AMBIENT, color);
-		mat.ka = glm::vec4(color.r, color.g, color.b, 1.0);
+		mat.bxdfPara = glm::vec4(color.r, color.g, color.b, 1.0);
 		material->Get(AI_MATKEY_COLOR_DIFFUSE, color);
 		mat.kd = glm::vec4(color.r, color.g, color.b, 1.0);
 		material->Get(AI_MATKEY_COLOR_SPECULAR, color);
@@ -159,7 +159,7 @@ void myModel::simplify() {
 
 	std::vector<Mesh> simpleMeshs;
 	for (int i = 0; i < this->meshs.size(); i++) {
-		if (this->meshs[i].indices.size() < 100) {
+		if (this->meshs[i].indices.size() < 100) {	//2950
 			simpleMeshs.push_back(this->meshs[i]);
 		}
 	}
@@ -216,12 +216,27 @@ void myModel::optimize() {
 //现在的模型太小了，放大10倍看看
 void myModel::modelChange() {
 
+	/*
 	glm::mat4 model = glm::scale(glm::mat4(1.0f), glm::vec3(5.0f, 5.0f, 5.0f));
 	for (int i = 0; i < this->meshs.size(); i++) {
 		for (int j = 0; j < this->meshs[i].vertices.size(); j++) {
 			glm::vec3 pos = this->meshs[i].vertices[j].pos;
 			glm::vec4 changePos = model * glm::vec4(pos, 1.0f);
 			this->meshs[i].vertices[j].pos = glm::vec3(changePos.x, changePos.y, changePos.z);
+		}
+	}
+	*/
+
+	for (int i = 0; i < this->meshs.size(); i++) {
+		if (this->meshs[i].vertices.size() > 100) {
+
+			glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(0.6f, -0.4f, 0.6f));
+			for (int j = 0; j < this->meshs[i].vertices.size(); j++) {
+
+				this->meshs[i].vertices[j].pos = glm::vec3(model * glm::vec4(this->meshs[i].vertices[j].pos, 1.0f));
+
+			}
+
 		}
 	}
 

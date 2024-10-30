@@ -94,11 +94,13 @@ void myScene::makeBvhTree(BvhTreeNode* node, std::vector<uint32_t> meshsIndex) {
 	std::vector<uint32_t> meshsLeftIndexTemp;
 	std::vector<uint32_t> meshsRightIndexTemp;
 	bool splitEnable = false;
+	bool splitEnableAll = false;
 	int difference = meshsIndex.size();
 	for (int i = 0; i < 3; i++) {
 
 		splitEnable = splitSpace(i * 2, splitPoint[i], meshsIndex, meshsLeftIndexTemp, meshsRightIndexTemp);
 		if (splitEnable) {
+			splitEnableAll = true;
 			int diff = meshsLeftIndexTemp.size() - meshsRightIndexTemp.size() < 0 ? meshsRightIndexTemp.size() - meshsLeftIndexTemp.size() : meshsLeftIndexTemp.size() - meshsRightIndexTemp.size();
 			if (diff < difference) {
 				meshsLeftIndex = meshsLeftIndexTemp;
@@ -110,7 +112,7 @@ void myScene::makeBvhTree(BvhTreeNode* node, std::vector<uint32_t> meshsIndex) {
 		meshsRightIndexTemp.resize(0);
 
 	}
-	if (!splitEnable) {
+	if (!splitEnableAll) {
 		return;
 	}
 

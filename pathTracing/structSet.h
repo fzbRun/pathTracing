@@ -125,7 +125,7 @@ struct ComputeVertex {
 };
 
 struct Material {
-	glm::vec4 ka;
+	glm::vec4 bxdfPara;	//这里本来是ka的，但是我修改mtl文件，将粗糙度放到了ka.x，金属值放到了ka.y，而折射率放到了ka.z，粗糙度放到
 	glm::vec4 kd;
 	glm::vec4 ks;
 	glm::vec4 ke;
