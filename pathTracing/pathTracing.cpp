@@ -419,12 +419,17 @@ private:
 		//uniform
 		//光源MVP
 		my_buffer->createUniformBuffers(my_device->physicalDevice, my_device->logicalDevice, MAX_FRAMES_IN_FLIGHT, sizeof(UniformBufferObject), true);
-		UniformBufferObject lightMVP;
-		lightMVP.model = glm::mat4(1.0f);
-		lightMVP.view = glm::lookAt(glm::vec3(0.0f, 1.94f, -0.03f), glm::vec3(0.0f, 1.95f, -0.03f) + glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
-		lightMVP.proj = glm::perspective(glm::radians(90.0f), my_swapChain->swapChainExtent.width / (float)my_swapChain->swapChainExtent.height, 0.1f, 100.0f);
-		lightMVP.proj[1][1] *= -1;
-		memcpy(my_buffer->uniformBuffersMappedsStatic[0], &lightMVP, sizeof(UniformBufferObject));
+		UniformBufferObject lightUniform;
+		lightUniform.model = glm::mat4(1.0f);
+		lightUniform.view = glm::lookAt(glm::vec3(0.0f, 1.94f, -0.03f), glm::vec3(0.0f, 1.95f, -0.03f) + glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
+		lightUniform.proj = glm::perspective(glm::radians(90.0f), my_swapChain->swapChainExtent.width / (float)my_swapChain->swapChainExtent.height, 0.1f, 100.0f);
+		lightUniform.proj[1][1] *= -1;
+		Light light;
+		light.lightPos_strength = glm::vec4(-0.24f, 1.95f, -0.22f, 50.0f);
+		light.normal = glm::vec4(0.0f, -1.0f, 0.0f, dis(gen));
+		light.size = glm::vec4(0.47f, 0.0f, 0.38f, 0.0f);
+		lightUniform.light = light;
+		memcpy(my_buffer->uniformBuffersMappedsStatic[0], &lightUniform, sizeof(UniformBufferObject));
 		
 		//相机MVP
 		my_buffer->createUniformBuffers(my_device->physicalDevice, my_device->logicalDevice, MAX_FRAMES_IN_FLIGHT, sizeof(UniformBufferObject), false);
@@ -973,7 +978,7 @@ private:
 	}
 
 	void createComputePipeline() {
-		auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/computeShader.spv");
+		auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/bdptComputeShader.spv");
 
 		VkShaderModule computeShaderModule = createShaderModule(computeShaderCode);
 
@@ -1197,10 +1202,10 @@ private:
 
 		Light light;
 		light.lightPos_strength = glm::vec4(-0.24f, 1.95f, -0.22f, 50.0f);
-		light.normal_randomNumber = glm::vec4(0.0f, -1.0f, 0.0f, dis(gen));
+		light.normal= glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
 		light.size = glm::vec4(0.47f, 0.0f, 0.38f, 0.0f);
 		ubo.light = light;
-		ubo.cameraPos = glm::vec4(camera.Position, 0.0f);
+		ubo.cameraPos_randomNumber = glm::vec4(camera.Position, dis(gen));
 
 		memcpy(my_buffer->uniformBuffersMappeds[0][currentFrame], &ubo, sizeof(ubo));
 

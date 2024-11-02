@@ -188,7 +188,7 @@ struct Mesh {
 
 struct Light {
 	glm::vec4 lightPos_strength;
-	glm::vec4 normal_randomNumber;
+	glm::vec4 normal;
 	glm::vec4 size;
 };
 
@@ -198,7 +198,7 @@ struct UniformBufferObject {
 	glm::mat4 proj;
 	//强制对齐，必须是2的倍数
 	Light light;
-	glm::vec4 cameraPos;
+	glm::vec4 cameraPos_randomNumber;
 };
 
 struct DescriptorObject {
