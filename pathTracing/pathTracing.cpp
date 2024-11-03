@@ -153,6 +153,7 @@ private:
 	std::vector<VkFence> inFlightFences;
 	std::vector<VkFence> computeInFlightFences;
 	uint32_t currentFrame = 0;
+	int frameNum = 0;
 
 	bool framebufferResized = false;
 
@@ -429,6 +430,7 @@ private:
 		light.normal = glm::vec4(0.0f, -1.0f, 0.0f, dis(gen));
 		light.size = glm::vec4(0.47f, 0.0f, 0.38f, 0.0f);
 		lightUniform.light = light;
+		lightUniform.randomNumber = glm::vec4(dis(gen), dis(gen), dis(gen), dis(gen));
 		memcpy(my_buffer->uniformBuffersMappedsStatic[0], &lightUniform, sizeof(UniformBufferObject));
 		
 		//相机MVP
@@ -978,6 +980,7 @@ private:
 	}
 
 	void createComputePipeline() {
+		//auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/computeShader.spv");
 		auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/bdptComputeShader.spv");
 
 		VkShaderModule computeShaderModule = createShaderModule(computeShaderCode);
@@ -1183,6 +1186,7 @@ private:
 		}
 
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+		frameNum++;
 
 	}
 
@@ -1205,7 +1209,9 @@ private:
 		light.normal= glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
 		light.size = glm::vec4(0.47f, 0.0f, 0.38f, 0.0f);
 		ubo.light = light;
-		ubo.cameraPos_randomNumber = glm::vec4(camera.Position, dis(gen));
+		ubo.cameraPos = glm::vec4(camera.Position, dis(gen));
+		ubo.randomNumber = glm::vec4(dis(gen), dis(gen), dis(gen), float(frameNum % 1000));
+		//std::cout << ubo.randomNumber.x << " " << ubo.randomNumber.y << std::endl;
 
 		memcpy(my_buffer->uniformBuffersMappeds[0][currentFrame], &ubo, sizeof(ubo));
 

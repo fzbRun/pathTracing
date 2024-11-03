@@ -15,8 +15,7 @@ struct Light {
 	vec4 normal;
 	vec4 size;
 };
-int lightA = 36;
-int sqrtLightA = 6;
+float lightA;
 vec3 lightStrength = vec3(27.0f, 22.0f, 14.0f);
 
 struct AABBBox {
@@ -62,7 +61,8 @@ layout(set = 0, binding = 0) uniform LightUniformBufferObject {
 	mat4 view;
 	mat4 proj;
 	Light light;
-	vec4 cameraPos_randomNumber;
+	vec4 cameraPos;
+	vec4 randomNumber;
 } lubo;
 
 layout(set = 1, binding = 0) uniform cameraUniformBufferObject {
@@ -70,7 +70,8 @@ layout(set = 1, binding = 0) uniform cameraUniformBufferObject {
 	mat4 view;
 	mat4 proj;
 	Light light;
-	vec4 cameraPos_randomNumber;
+	vec4 cameraPos;
+	vec4 randomNumber;	//xyz是随机数，而w是帧数
 } cubo;
 layout(set = 2, binding = 0, std430) readonly buffer BvhArray{
 	BvhArrayNode bvhArrayNode[];
@@ -143,7 +144,7 @@ Ray makeStartRayFromCamera(vec2 texelUV){
 	vec4 ndcPos = vec4(texelUV * 2.0f - 1.0f, 0.0f, 1.0f);
 	vec4 worldPos = inverse(cubo.proj * cubo.view) * ndcPos;
 	Ray ray;
-	ray.startPos = cubo.cameraPos_randomNumber.xyz;
+	ray.startPos = cubo.cameraPos.xyz;
 	ray.direction = normalize((worldPos.xyz / worldPos.w) - ray.startPos);	//得到的worldPos是近平面的一点
 	ray.normal = ray.direction;//normalize(transpose(mat3(cubo.view)) * vec3(0.0f, 0.0f, -1.0f));	//逆矩阵的转置的逆 = 转置 
 	ray.depth = 100.0f;	//远平面
@@ -153,7 +154,7 @@ Ray makeStartRayFromCamera(vec2 texelUV){
 }
 
 //光源的子路径的第一个点，即光源，需要被记录
-Ray makeStartRayFromLight(uint randomNumberSeed, inout float MISWeight){
+Ray makeStartRayFromLight(inout uint randomNumberSeed, inout float pdf){
 
 	Ray ray;
 	vec3 randomNumber = vec3(rand(randomNumberSeed), rand(randomNumberSeed), rand(randomNumberSeed)) * 2.0f - 1.0f;
@@ -166,15 +167,20 @@ Ray makeStartRayFromLight(uint randomNumberSeed, inout float MISWeight){
 	float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
 	ray.direction = normalize(vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta));
 
-	vec3 tangent = normalize(cross(vec3(0.0f, 1.0f, 0.0f), ray.normal));
-	vec3 bitangent = normalize(cross(ray.normal, tangent));
+	vec3 tangent;
+	if(abs(ray.normal.x) > abs(ray.normal.y))
+        tangent = vec3(ray.normal.z, 0, -ray.normal.x);
+    else
+        tangent = vec3(0, -ray.normal.z, ray.normal.y);
+	tangent = normalize(tangent);
+    vec3 bitangent = cross(ray.normal, tangent);
 	mat3 TBN = mat3(tangent, bitangent, ray.normal);
 
 	ray.direction = normalize(TBN * ray.direction);
 	ray.depth = 100.0f;
-	ray.radiance = lightStrength / float(lightA);
+	ray.radiance = lightStrength / lightA;
 
-	MISWeight = cosTheta / PI;
+	pdf =  clamp(cosTheta / PI, 0.01f, 1.0f);
 
 	return ray;
 
@@ -183,24 +189,33 @@ Ray makeStartRayFromLight(uint randomNumberSeed, inout float MISWeight){
 //----------------------------getDirection-------------------------------------------
 
 //需要材质、TBN
-vec4 getRayReflectDirection(Material material, mat3 TBN, float randomNumber){
+vec4 getRayReflectDirection(Material material, mat3 TBN, vec3 i, vec3 normal, float randomNumber){
 
 	vec2 randomNumberH = Hammersley(uint(randomNumber * 100), 100);
 
-	float roughness = material.bxdfPara.x;
+	float roughness =  max(material.bxdfPara.x, 0.1f);	//若粗糙度为0，D将是0/0，且趋近于无穷，除非分子上是a4，但是又会导致不是趋近于0时的值的错误
 	float a2 = roughness * roughness * roughness * roughness;
 	float phi = 2.0 * PI * randomNumberH.x;
 	//若roughness是1，则cosTheta是sqrt(1-randomNumberH.y)，所以完全粗糙的情况下，就是cos加权，且pdf也就是cosTheta / PI
 	float cosTheta = sqrt((1.0 - randomNumberH.y) / (1.0 + (a2 - 1.0) * randomNumberH.y));
 	float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
 
-	vec3 rayDirection = normalize(vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta));
-	rayDirection = normalize(TBN * rayDirection);
+	vec3 h = normalize(vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta));
+	h = normalize(TBN * h);
 
 	float d = (a2 - 1) * cosTheta * cosTheta + 1;
 	float D = a2 / (PI * d * d);
+	float pdf = D * cosTheta;	//h的pdf
 
-	return vec4(rayDirection, max(D * cosTheta, 0.001f));	//pdf是D * cosTheta
+	vec3 rayDirection = normalize(2.0f * dot(h, i) * h - i);
+
+	if(dot(rayDirection, normal) > 0.0f){
+		pdf = pdf / (4 * dot(h, i));	//出射的pdf
+	}else{
+		rayDirection = h;	//将h当作出射向量
+	}
+
+	return vec4(rayDirection, clamp(pdf, 0.01f, 1.0f));
 
 
 }
@@ -426,7 +441,7 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0)
 vec3 getFr(vec3 startPos, vec3 currentPos, vec3 currentNormal, vec3 hitPos, Material material){
 
 	vec3 albedo = material.kd.rgb;
-	float roughness = material.bxdfPara.x;
+	float roughness = max(material.bxdfPara.x, 0.1f);
 	float metallic = material.bxdfPara.y;
 	float refractivity = material.bxdfPara.z;
 
@@ -454,7 +469,7 @@ vec3 getFr(vec3 startPos, vec3 currentPos, vec3 currentNormal, vec3 hitPos, Mate
 	vec3 kd = vec3(1.0) - ks;
 	kd *= 1.0 - metallic;
 
-	return (kd * albedo * diff_fr + ks * spec_fr) ;
+	return kd * albedo * diff_fr + ks * spec_fr;
 
 }
 
@@ -462,7 +477,7 @@ vec3 getFr(vec3 startPos, vec3 currentPos, vec3 currentNormal, vec3 hitPos, Mate
 vec3 getRadianceFromHitPoint(Material material) {
 	
 	if(material.ke.rgb != vec3(0.0f)){
-		return material.ke.rgb / float(lightA);	//场景就一个光源有自发光，所以写死
+		return material.ke.rgb / lightA;	//场景就一个光源有自发光，所以写死
 	}
 	return vec3(0.0f);
 }
@@ -479,16 +494,21 @@ void getHitPointNormalAndTBN(int vertexIndex, inout vec3 normal, vec3 i, inout m
 	vec3 tangent = normalize(P1 - P0);
 	vec3 bitangent = normalize(P2 - P0);
 	normal = normalize(cross(tangent, bitangent));
-	//bitangent = normalize(cross(normal, tangent));
-	//TBN = mat3(tangent, bitangent, normal);
+	bitangent = normalize(cross(normal, tangent));
+	TBN = mat3(tangent, bitangent, normal);
 
-	//原本采取均匀出射，那么需要将符合均匀分布的出射向量转移到以normal为轴的世界空间
-	//但是现在采取GGX重要性采样，符合反射波瓣分布的出射向量要转移到以反射向量为轴的世界空间下，所以现在TBN的N应该是反射方向
-	tangent = normal;
-	vec3 sampleNormal = normalize(reflect(i, normal));	//i已经是指向顶点的了，即ray.direction
-	bitangent = normalize(cross(sampleNormal, tangent));
-	tangent = normalize(cross(bitangent, sampleNormal));
-	TBN = mat3(tangent, bitangent, sampleNormal);
+	//大错特错！！！！！！！！
+	//tangent = normal;
+	//vec3 sampleNormal = normalize(reflect(i, normal));	//i已经是指向顶点的了，即ray.direction
+	//bitangent = normalize(cross(sampleNormal, tangent));
+	//tangent = normalize(cross(bitangent, sampleNormal));
+	//TBN = mat3(tangent, bitangent, sampleNormal);
+
+	//i = -i;
+	//vec3 up = abs(i.z) < 0.999f ? vec3(0.0f, 0.0f, 1.0f) : vec3(1.0f, 0.0f, 0.0f);
+	//tangent = normalize(cross(up, i));
+	//bitangent = cross(i, tangent);
+	//TBN = mat3(tangent, bitangent, i);
 	
 }
 
@@ -496,13 +516,13 @@ void getHitPointNormalAndTBN(int vertexIndex, inout vec3 normal, vec3 i, inout m
 //需要注意的是，在原文中无论是光源子路径还是相机子路径，0表示没有固定的顶点，即考另一个路径浪射，所以pdf也没有意义，设为1
 //但是我感觉没什么意义啊，99%都射不到，我直接将原本的1当作0好了，也就是从1开始
 int s = 4;
-float sMISWeight[3] = float[3](0.0f, 0.0f, 0.0f);
-vec3 sRadiance[4] = vec3[4](lightStrength / float(lightA), vec3(0.0f), vec3(0.0f), vec3(0.0f));	//其实是来的radiance / pdf，但是其能量是垂直的
+float sMISWeight[4] = float[4](1.0f, 1.0f, 1.0f, 1.0f);	//存的是前面顶点的出射pdf之积
+vec3 sRadiance[4] = vec3[4](vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f));	//其实是来的radiance / pdf，但是其能量是垂直的
 vec3 sHitPos[4] = vec3[4](vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f));
-int makeSubLightPath(uint randomNumberSeed){
-
-	Ray ray = makeStartRayFromLight(randomNumberSeed, sMISWeight[0]);
-	sHitPos[0] = ray.startPos;
+vec3 sHitNormal[4] = vec3[4](vec3(0.0f, -1.0f, 0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f));
+int sHitMesh[4] = int[4](0, 0, 0, 0);
+vec3 sEmission[4] = vec3[4](vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f));
+int makeSubLightPath(inout uint randomNumberSeed){
 
 	vec3 lastHitPos;
 	vec3 radiance = vec3(0.0f);
@@ -515,36 +535,47 @@ int makeSubLightPath(uint randomNumberSeed){
 	float pdf = 1.0f;
 
 	int lossNum = 0;
-	int lossNumMax = 10;
+	int lossNumMax = 30;
+
+	sMISWeight[0] = 1 / lightA;
+	Ray ray = makeStartRayFromLight(randomNumberSeed, pdf);
+
+	sRadiance[0] = lightStrength / lightA;
+	sHitPos[0] = ray.startPos;
 
 	ivec2 result = hitScene(ray, normalSign);
 	while(lossNum < lossNumMax && result.x == -1){
-		randomNumberSeed += lossNum * 100;
-		float randomNumber = 0.8f * (float(lossNum) / float(lossNumMax)) + 0.2f * rand(randomNumberSeed);
-		ray = makeStartRayFromLight(randomNumberSeed, sMISWeight[0]);
+		randomNumberSeed = randomNumberSeed + lossNum;
+		ray = makeStartRayFromLight(randomNumberSeed, pdf);
 
 		lossNum++;
 		result = hitScene(ray, normalSign);
 	}
 	if(lossNum - 1 == lossNumMax){
-		return 0;
+		return 1;
 	}
+	sMISWeight[1] = sMISWeight[0] * pdf;
 
 	int meshIndex = result.x;
 	int vertexIndex = result.y;
 	hitPos = ray.startPos + ray.depth * ray.direction;
 	sHitPos[1] = hitPos;
+	sHitMesh[1] = meshIndex;
 
 	vec3 normal;
 	getHitPointNormalAndTBN(vertexIndex, normal, ray.direction, TBN);	//计算面法线
+	sHitNormal[1] = normal;
 
 	material = meshs[meshIndex].material;
+	sEmission[1] = material.ke.rgb;
+
+
+	float distance = length(ray.startPos - hitPos);
+	sRadiance[1] = ray.radiance * max(dot(ray.normal, ray.direction), 0.0f) * max(dot(normal, -ray.direction), 0.0f) / (distance * distance) / pdf;
 
 	float randomNumber = rand(randomNumberSeed);
 	randomNumber = smoothstep(0.0f, 1.0f, randomNumber);
-	sRadiance[1] = ray.radiance * max(dot(ray.normal, ray.direction), 0.0f) * max(dot(normal, -ray.direction), 0.0f) / sMISWeight[0];
-	vec4 directionAndPdf = getRayReflectDirection(material, TBN, randomNumber);
-	sMISWeight[1] = directionAndPdf.w * sMISWeight[0];
+	vec4 directionAndPdf = getRayReflectDirection(material, TBN, -ray.direction, normal, randomNumber);
 	pdf = directionAndPdf.w;
 
 	lastHitPos = ray.startPos;
@@ -555,14 +586,14 @@ int makeSubLightPath(uint randomNumberSeed){
 	ray.depth = 100.0f;
 
 	for(int i = 2; i < s; i++){
-	
+
 		lossNum = 0;
 		ivec2 result = hitScene(ray, normalSign);
 		while(lossNum <= lossNumMax && result.x == -1){
 
-			randomNumberSeed += lossNum * 100;
+			randomNumberSeed += lossNum;
 			float randomNumber = 0.8f * (float(lossNum) / float(lossNumMax)) + 0.2f * rand(randomNumberSeed);
-			directionAndPdf = getRayReflectDirection(material, TBN, randomNumber);
+			directionAndPdf = getRayReflectDirection(material, TBN, normalize(lastHitPos - ray.startPos), normal, randomNumber);
 
 			ray.startPos = ray.startPos - 0.01f * ray.direction + 0.01f * normalize(directionAndPdf.xyz);
 			ray.direction = normalize(directionAndPdf.xyz);
@@ -575,29 +606,29 @@ int makeSubLightPath(uint randomNumberSeed){
 		if(lossNum - 1 == lossNumMax){
 			return i;
 		}
-		sMISWeight[i - 1] = directionAndPdf.w * sMISWeight[i - 2];
 		pdf = directionAndPdf.w;
+		sMISWeight[i] = pdf * sMISWeight[i - 1];
 
 		int meshIndex = result.x;
 		int vertexIndex = result.y;
 		hitPos = ray.startPos + ray.depth * ray.direction;
 		sHitPos[i] = hitPos;
+		sHitMesh[i] = meshIndex;
 
-		vec3 normal;
 		getHitPointNormalAndTBN(vertexIndex, normal, ray.direction, TBN);		//计算面法线
+		sHitNormal[i] = normal;
 
 		lastMaterial = material;
 		material = meshs[meshIndex].material;
+		sEmission[i] = material.ke.rgb;
 
 		//getFr是按之前pathTracing的getWeight改的，而pathTracing是将hit为入射，lastHit为出射，所以这里要反一下
 		fr = getFr(hitPos, ray.startPos, ray.normal, lastHitPos, lastMaterial);
-		sRadiance[i] = fr * ray.radiance * max(dot(normal, -ray.direction), 0.0f) / pdf;
+		sRadiance[i] = (fr * ray.radiance + sEmission[i - 1] * max(dot(ray.normal, ray.direction), 0.0f)) * max(dot(normal, -ray.direction), 0.0f) / pdf;
 
-		randomNumberSeed += i * 1000;
 		float randomNumber = rand(randomNumberSeed);
 		randomNumber = smoothstep(0.0f, 1.0f, randomNumber);
-		directionAndPdf = getRayReflectDirection(material, TBN, randomNumber);
-		sMISWeight[i] = directionAndPdf.w * sMISWeight[i - 1];
+		directionAndPdf = getRayReflectDirection(material, TBN, -ray.direction, normal, randomNumber);
 		pdf = directionAndPdf.w;
 
 		lastHitPos = ray.startPos;
@@ -614,14 +645,16 @@ int makeSubLightPath(uint randomNumberSeed){
 }
 
 int t = 4;
-float tMISWeight[3] = float[3](1.0f, 0.0f, 0.0f);
+float tMISWeight[4] = float[4](1.0f, 1.0f, 1.0f, 1.0f);
 //相机子路径不需要记录radiance，因为没有，但是需要记录前面的顶点的fr*g / pdf的累乘
 //索引0和1都是1.0f，因为0没有，而1的就是0的
 vec3 tFrGWeight[4] = vec3[4](vec3(1.0f), vec3(1.0f), vec3(1.0f), vec3(1.0f));
+vec3 tRadiance[4] = vec3[4](vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f));
 vec3 tHitPos[4] = vec3[4](vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f));
 vec3 tHitNormal[4] = vec3[4](vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f));
-int tHitMesh[4] = int[4](-1,-1, -1, -1);
-int makeSubCameraPath(Ray ray, uint randomNumberSeed){
+int tHitMesh[4] = int[4](0, 0, 0, 0);
+vec3 tEmission[4] = vec3[4](vec3(0.0f), vec3(0.0f), vec3(0.0f), vec3(0.0f));
+int makeSubCameraPath(Ray ray, inout uint randomNumberSeed){
 
 	vec3 radiance = vec3(0.0f);
 	Material lastMaterial;
@@ -634,11 +667,13 @@ int makeSubCameraPath(Ray ray, uint randomNumberSeed){
 	float normalSign = 1.0f;	//-1说明是内到内，我们不需要剔除背面，而1表示外到内或内到外，需要剔除背面
 
 	int lossNum = 0;
-	int lossNumMax = 10;
+	int lossNumMax = 30;
+
+	tHitPos[0] = ray.startPos;
 
 	ivec2 result = hitScene(ray, normalSign);
 	if(result.x == -1){
-		return 0;
+		return 1;
 	}
 
 	int meshIndex = result.x;
@@ -652,12 +687,14 @@ int makeSubCameraPath(Ray ray, uint randomNumberSeed){
 	tHitNormal[1] = normal;
 
 	material = meshs[meshIndex].material;
+	tEmission[1] = material.ke.rgb;
 
 	float randomNumber = rand(randomNumberSeed);
 	randomNumber = smoothstep(0.0f, 1.0f, randomNumber);
-	vec4 directionAndPdf = getRayReflectDirection(material, TBN, randomNumber);
-	sMISWeight[1] = directionAndPdf.w * sMISWeight[0];
+	vec4 directionAndPdf = getRayReflectDirection(material, TBN, -ray.direction, normal, randomNumber);
 	pdf = directionAndPdf.w;
+
+	tRadiance[1] = tEmission[1] * max(dot(normal, -ray.direction), 0.0f);
 
 	lastHitPos = ray.startPos;
 	ray.direction = normalize(directionAndPdf.xyz);
@@ -671,12 +708,12 @@ int makeSubCameraPath(Ray ray, uint randomNumberSeed){
 		ivec2 result = hitScene(ray, normalSign);
 		while(lossNum <= lossNumMax && result.x == -1){
 
-			randomNumberSeed += lossNum * 100;
+			randomNumberSeed += lossNum;
 			float randomNumber = 0.8f * (float(lossNum) / float(lossNumMax)) + 0.2f * rand(randomNumberSeed);
-			directionAndPdf = getRayReflectDirection(material, TBN, randomNumber);	//每次rand后都会修改randomNumberSeed
+			directionAndPdf = getRayReflectDirection(material, TBN, normalize(lastHitPos - ray.startPos), normal, randomNumber);	//每次rand后都会修改randomNumberSeed
 
-			ray.startPos = ray.startPos - 0.01f * ray.direction + 0.01f * normalize(directionAndPdf.xyz);
-			ray.direction = normalize(directionAndPdf.xyz);
+			ray.startPos = ray.startPos - 0.01f * ray.direction + 0.01f * directionAndPdf.xyz;
+			ray.direction = directionAndPdf.xyz;
 			ray.depth = 100.0f;
 
 			lossNum++;
@@ -686,8 +723,8 @@ int makeSubCameraPath(Ray ray, uint randomNumberSeed){
 		if(lossNum - 1 == lossNumMax){
 			return i;
 		}
-		sMISWeight[i-1] = directionAndPdf.w * sMISWeight[i-2]; 
 		pdf = directionAndPdf.w;
+		tMISWeight[i] = pdf * sMISWeight[i - 1];
 
 		int meshIndex = result.x;
 		int vertexIndex = result.y;
@@ -695,22 +732,21 @@ int makeSubCameraPath(Ray ray, uint randomNumberSeed){
 		tHitPos[i] = hitPos;
 		tHitMesh[i] = meshIndex;
 
-		vec3 normal;
 		getHitPointNormalAndTBN(vertexIndex, normal, ray.direction, TBN);		//计算面法线
 		tHitNormal[i] = normal;
 
 		lastMaterial = material;
 		material = meshs[meshIndex].material;
+		tEmission[i] = material.ke.rgb;
+
+		tFrGWeight[i] = tFrGWeight[i - 1] * getFr(lastHitPos, ray.startPos, ray.normal, hitPos, lastMaterial) * max(dot(ray.normal, normalize(hitPos - ray.startPos)), 0.0f) / pdf;
 		
-		randomNumberSeed += i * 1000;
 		float randomNumber = rand(randomNumberSeed);
 		randomNumber = smoothstep(0.0f, 1.0f, randomNumber);
-		tFrGWeight[i] = tFrGWeight[i - 1] * getFr(lastHitPos, ray.startPos, ray.normal, hitPos, lastMaterial) * max(dot(ray.normal, normalize(hitPos - ray.startPos)), 0.0f) / pdf;
-		directionAndPdf = getRayReflectDirection(material, TBN, randomNumber);
-		if(i < s - 1){
-			sMISWeight[i] = directionAndPdf.w * sMISWeight[i-1];
-		}
+		directionAndPdf = getRayReflectDirection(material, TBN, -ray.direction, normal, randomNumber);
 		pdf = directionAndPdf.w;
+
+		tRadiance[i] = tEmission[i] * max(dot(normal, -ray.direction), 0.0f) * tFrGWeight[i - 1] + tRadiance[i - 1];
 
 		lastHitPos = ray.startPos;
 		ray.direction = normalize(directionAndPdf.xyz);
@@ -727,51 +763,123 @@ int makeSubCameraPath(Ray ray, uint randomNumberSeed){
 void main(){
 
 	vec3 radiance = vec3(0.0f);
-	int sppNum = 2;
+	int sppNum = 1;
 	vec2 texelSize = 1.0f / (gl_WorkGroupSize * gl_NumWorkGroups).xy;
+	//uint randomNumber = uint(cubo.randomNumber.w + gl_GlobalInvocationID + cubo.randomNumber.x) % 1000;
 
-	uvec2 seed2 = pcg2d(ivec2(gl_LocalInvocationIndex) * (sppNum * uint(floor(cubo.cameraPos_randomNumber)) + 1));
-	uint seed = seed2.x + seed2.y;
-	//vec2 texelUV = (vec2(gl_GlobalInvocationID.xy) + vec2(rand(seed), rand(seed))) * texelSize;
-	vec2 texelUV = vec2(gl_GlobalInvocationID.xy) * texelSize;
+	//不是，这个灯泡这么小？太亮了
+	lightA = 1;		//lubo.light.size.x * lubo.light.size.z;
 
-	Ray ray = makeStartRayFromCamera(texelUV);
-	s = makeSubLightPath(seed);
-	t = makeSubCameraPath(ray, seed);
+	for(int spp = 0; spp < sppNum; spp++){
+	
+		uvec2 seed2 = pcg2d(ivec2(gl_GlobalInvocationID) * (uint(cubo.randomNumber.w) + spp * 10 + sppNum * ivec2(cubo.randomNumber.x, cubo.randomNumber.y + cubo.randomNumber.z) + 1));
+		uint seed = seed2.x + seed2.y;
+		vec2 texelUV = (vec2(gl_GlobalInvocationID.xy) + vec2(rand(seed), rand(seed))) * texelSize;
 
-	float MISWeight[6] = float[6](0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+		Ray ray = makeStartRayFromCamera(texelUV);
+		s = makeSubLightPath(seed);
+		t = makeSubCameraPath(ray, seed);
 
-	for(int i = 1; i < s; i++){
-		for(int j = 2; j < t; j++){
-			MISWeight[i + j - 3] += sMISWeight[i - 1] +  tMISWeight[j - 1];
+		float MISWeight[6] = float[6](0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+
+		for(int i = 0; i < s; i++){
+			for(int j = 1; j < t; j++){
+
+				//判断连接是否会被遮挡
+
+				if(dot(sHitNormal[i], tHitPos[j] - sHitPos[i]) <= 0.0f){
+					continue;
+				}
+
+				if(dot(sHitPos[i] - tHitPos[j], tHitNormal[j]) <= 0.0f){
+					continue;
+				}
+
+				Ray ray;
+				ray.direction = normalize(tHitPos[j] - sHitPos[i]);
+				ray.startPos = sHitPos[i];
+				ray.depth = 100.0f;
+				hitScene(ray, 1.0f);
+				if(abs(ray.depth - length(sHitPos[i] - tHitPos[j])) > 0.01f){
+					continue;	//有遮挡，则不计入
+				}
+
+				MISWeight[i + j - 1] += sMISWeight[i] * tMISWeight[j];
+
+			}
 		}
-	}
 
-	for(int i = 1; i < s; i++){
-		for(int j = 2; j < t; j++){
-			
-			Material material = meshs[tHitMesh[j - 1]].material;
-			vec3 fr = getFr(tHitPos[j - 2], tHitPos[j - 1], tHitNormal[j - 1], sHitPos[i - 1], material);
-			vec3 noWeightRadiance = fr * sRadiance[i - 1] * max(dot(sHitPos[i - 1] - tHitPos[j - 1], tHitNormal[j - 1]), 0.0f) * tFrGWeight[j - 1];
-		
-			float weight = (sMISWeight[i - 1] +  tMISWeight[j - 1]) / MISWeight[i + j - 3];
+		for(int j = 1; j < t; j++){
 
-			//判断连接是否会被遮挡
-			Ray ray;
-			ray.direction = normalize(tHitPos[j - 1] - sHitPos[i - 1]);
-			ray.startPos = sHitPos[i - 1];
-			ray.depth = 100.0f;
-			hitScene(ray, 1.0f);
-			if(abs(ray.depth - length(sHitPos[i - 1] - tHitPos[j - 1])) > 0.1f){
+			if(dot(sHitNormal[0], tHitPos[j] - sHitPos[0]) <= 0.0f){
 				continue;
 			}
 
-			radiance += noWeightRadiance * weight;
+			if(dot(sHitPos[0] - tHitPos[j], tHitNormal[j]) <= 0.0f){
+				continue;
+			}
 			
+			Ray ray;
+			ray.direction = normalize(tHitPos[j] - sHitPos[0]);
+			ray.startPos = sHitPos[0];
+			ray.depth = 100.0f;
+			hitScene(ray, 1.0f);
+			if(abs(ray.depth - length(sHitPos[0] - tHitPos[j])) > 0.01f){
+				continue;
+			}
+			
+			float distance = length(tHitPos[j] - sHitPos[0]);
+			vec3 frCamera = getFr(tHitPos[j - 1], tHitPos[j], tHitNormal[j], sHitPos[0], meshs[tHitMesh[j]].material);
+			
+			vec3 noWeightRadiance = tRadiance[j] + 
+									frCamera * sRadiance[0] / (distance * distance) * 
+									max(dot(sHitPos[0] - tHitPos[j], tHitNormal[j]), 0.0f) * tFrGWeight[j];
+			
+			float weight = min((sMISWeight[0] * tMISWeight[j]) / max(MISWeight[j - 1], 0.01f), 1.0f);
+			radiance += noWeightRadiance * weight;
+
 		}
+
+
+		for(int i = 1; i < s; i++){
+			for(int j = 1; j < t; j++){
+
+				float cosThetaLight = dot(sHitNormal[i], normalize(tHitPos[j] - sHitPos[i]));
+				if(cosThetaLight <= 0.0f){
+					continue;
+				}
+
+				float cosThetaCamera = dot(normalize(sHitPos[i] - tHitPos[j]), tHitNormal[j]);
+				if(cosThetaCamera <= 0.0f){
+					continue;
+				}
+
+				//判断连接是否会被遮挡，之前判断过，现在还要判断第二次
+				Ray ray;
+				ray.direction = normalize(tHitPos[j] - sHitPos[i]);
+				ray.startPos = sHitPos[i];
+				ray.depth = 100.0f;
+				hitScene(ray, 1.0f);
+				if(abs(ray.depth - length(sHitPos[i] - tHitPos[j])) > 0.01f){
+					continue;
+				}
+
+				vec3 frLight = getFr(tHitPos[j], sHitPos[i], sHitNormal[i], sHitPos[i - 1], meshs[sHitMesh[i]].material);
+				vec3 frCamera = getFr(tHitPos[j - 1], tHitPos[j], tHitNormal[j], sHitPos[i], meshs[tHitMesh[j]].material);
+
+				vec3 noWeightRadiance = tRadiance[j] + (sEmission[i] * cosThetaLight + frLight * frCamera * sRadiance[i]) * cosThetaCamera * tFrGWeight[j];
+				float weight = min((sMISWeight[i] * tMISWeight[j]) / max(MISWeight[i + j - 1], 0.01f), 1.0f);
+				radiance += noWeightRadiance * weight;
+
+			}
+		}
+	
 	}
 
-	//radiance /= sppNum;
+	radiance /= float(sppNum);
+	radiance /= 6;
+
+	//radiance = s < 4 ? vec3(1.0f) : vec3(0.0f);
 	imageStore(pathTracingResult, ivec2(gl_GlobalInvocationID.xy), vec4(radiance, 1.0f));
 
 }

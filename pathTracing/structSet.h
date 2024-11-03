@@ -198,7 +198,8 @@ struct UniformBufferObject {
 	glm::mat4 proj;
 	//强制对齐，必须是2的倍数
 	Light light;
-	glm::vec4 cameraPos_randomNumber;
+	glm::vec4 cameraPos;
+	glm::vec4 randomNumber;
 };
 
 struct DescriptorObject {
