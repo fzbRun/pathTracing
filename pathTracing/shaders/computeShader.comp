@@ -10,12 +10,6 @@ struct Vertex {
 	vec4 normal;
 };
 
-struct Light {
-	vec4 lightPos_strength;
-	vec4 normal;
-	vec4 size;
-};
-
 struct AABBBox {
 	float leftX;
 	float rightX;
@@ -58,16 +52,15 @@ layout(set = 0, binding = 0) uniform LightUniformBufferObject {
 	mat4 model;
 	mat4 view;
 	mat4 proj;
-	Light light;
-	vec4 cameraPos;
-	vec4 randomNumber;
+	vec4 lightPos_strength;
+	vec4 normal;
+	vec4 size;
 } lubo;
 
 layout(set = 1, binding = 0) uniform cameraUniformBufferObject {
 	mat4 model;
 	mat4 view;
 	mat4 proj;
-	Light light;
 	vec4 cameraPos;
 	vec4 randomNumber;
 } cubo;
@@ -474,10 +467,10 @@ vec3 getRadianceFromLight(vec3 startPos, vec3 hitPos, vec3 normal, Material mate
 
 	vec3 radiance = vec3(0.0f);
 
-	vec3 lightPos = lubo.light.lightPos_strength.xyz;
+	vec3 lightPos = lubo.lightPos_strength.xyz;
 	vec3 lightStrength = vec3(27.0f, 22.0f, 14.0f);
-	vec3 lightNormal = normalize(lubo.light.normal.xyz);
-	vec4 lightSize = lubo.light.size;
+	vec3 lightNormal = normalize(lubo.normal.xyz);
+	vec4 lightSize = lubo.size;
 
 	float pdf = 1 / float(lightA);
 	vec3 o = normalize(startPos - hitPos);
@@ -620,7 +613,7 @@ vec3 getOneSPP(Ray ray, uint randomNumberSeed){
 
 	Material lastMaterial = material;
 	int lossNum = 0;
-	int lossNumMax = 10;
+	int lossNumMax = 5;
 	int maxShootNum = 6;
 	while(maxShootNum > 0){
 		
@@ -701,7 +694,7 @@ vec3 getOneSPP(Ray ray, uint randomNumberSeed){
 void main(){
 
 	vec3 radiance = vec3(0.0f);
-	int sppNum = 4;
+	int sppNum = 100;
 	vec2 texelSize = 1.0f / (gl_WorkGroupSize * gl_NumWorkGroups).xy;
 	for(int i = 0; i < sppNum; i++){
 	

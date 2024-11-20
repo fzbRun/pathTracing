@@ -5,7 +5,7 @@
 #include<cstdint>
 #include<limits>
 #include<fstream>
-#include <random>  
+#include <random>
 
 #include "structSet.h"
 #include "myDevice.h"
@@ -37,6 +37,8 @@ const bool enableValidationLayers = false;
 #else
 const bool enableValidationLayers = true;
 #endif
+
+#define GMM
 
 VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
 	const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebygMessenger) {
@@ -120,6 +122,8 @@ private:
 	//SwapChain
 	std::unique_ptr<mySwapChain> my_swapChain;
 
+	std::unique_ptr<myBuffer> my_buffer;
+
 	std::unique_ptr<myDescriptor> my_descriptor;
 
 	VkRenderPass shadowRenderPass;
@@ -130,8 +134,6 @@ private:
 	VkPipeline graphicsPipeline;
 	VkPipeline shadowGraphicsPipeline;
 	VkPipelineLayout shadowGraphicsPipelineLayout;
-
-	std::unique_ptr<myBuffer> my_buffer;
 
 	std::unique_ptr<myImage> pathTracingResult;
 	std::unique_ptr<myImage> shadowMap;
@@ -156,6 +158,18 @@ private:
 	int frameNum = 0;
 
 	bool framebufferResized = false;
+
+#ifdef GMM
+	VkPipelineLayout gmmLightTrainPipelineLayout;
+	VkPipeline gmmLightTrainPipeline;
+	float GMMVoxelSize = 0.1f;
+	glm::ivec3 GMMVoxelNum;
+	uint32_t GMMVoxelNumSum;
+	uint32_t GMMMaxSize;
+	std::vector<GMMPara> gmmParas;
+	std::vector<PhotonTracingResult> photonTracingResults;
+	uint32_t photonNumPerFrame = 32 * 32;	//每帧发射若干个光子用于训练
+#endif
 
 	void initWindow() {
 
@@ -419,23 +433,50 @@ private:
 
 		//uniform
 		//光源MVP
-		my_buffer->createUniformBuffers(my_device->physicalDevice, my_device->logicalDevice, MAX_FRAMES_IN_FLIGHT, sizeof(UniformBufferObject), true);
-		UniformBufferObject lightUniform;
+		my_buffer->createUniformBuffers(my_device->physicalDevice, my_device->logicalDevice, MAX_FRAMES_IN_FLIGHT, sizeof(UniformLightBufferObject), true);
+		UniformLightBufferObject lightUniform;
 		lightUniform.model = glm::mat4(1.0f);
 		lightUniform.view = glm::lookAt(glm::vec3(0.0f, 1.94f, -0.03f), glm::vec3(0.0f, 1.95f, -0.03f) + glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
 		lightUniform.proj = glm::perspective(glm::radians(90.0f), my_swapChain->swapChainExtent.width / (float)my_swapChain->swapChainExtent.height, 0.1f, 100.0f);
 		lightUniform.proj[1][1] *= -1;
-		Light light;
-		light.lightPos_strength = glm::vec4(-0.24f, 1.95f, -0.22f, 50.0f);
-		light.normal = glm::vec4(0.0f, -1.0f, 0.0f, dis(gen));
-		light.size = glm::vec4(0.47f, 0.0f, 0.38f, 0.0f);
-		lightUniform.light = light;
-		lightUniform.randomNumber = glm::vec4(dis(gen), dis(gen), dis(gen), dis(gen));
-		memcpy(my_buffer->uniformBuffersMappedsStatic[0], &lightUniform, sizeof(UniformBufferObject));
-		
+		lightUniform.lightPos_strength = glm::vec4(-0.24f, 1.95f, -0.22f, 50.0f);
+		lightUniform.normal = glm::vec4(0.0f, -1.0f, 0.0f, dis(gen));
+		lightUniform.size = glm::vec4(0.47f, 0.0f, 0.38f, 0.0f);
+		memcpy(my_buffer->uniformBuffersMappedsStatic[0], &lightUniform, sizeof(UniformLightBufferObject));
+
 		//相机MVP
 		my_buffer->createUniformBuffers(my_device->physicalDevice, my_device->logicalDevice, MAX_FRAMES_IN_FLIGHT, sizeof(UniformBufferObject), false);
-		
+
+
+#ifdef GMM
+
+		my_buffer->createUniformBuffers(my_device->physicalDevice, my_device->logicalDevice, MAX_FRAMES_IN_FLIGHT, sizeof(GMMConstant), true);
+		GMMConstant gmmConstant;
+		gmmConstant.voxelSize = GMMVoxelSize;
+
+		AABBBox aabb = my_scene->bvhArray[0].AABB;
+		gmmConstant.voxelStartPos = glm::vec4(aabb.leftX, aabb.leftY, aabb.leftZ, 0.0f);
+		GMMVoxelNum = glm::ivec3(std::ceil((aabb.rightX - aabb.leftX) / GMMVoxelSize), std::ceil((aabb.rightY - aabb.leftY) / GMMVoxelSize), std::ceil((aabb.rightZ - aabb.leftZ) / GMMVoxelSize));
+		gmmConstant.voxelNum = glm::ivec4(GMMVoxelNum, 0.0f);
+		gmmConstant.photonTracingNum = photonNumPerFrame;
+		memcpy(my_buffer->uniformBuffersMappedsStatic[1], &gmmConstant, sizeof(GMMConstant));
+
+		//GMM参数的存储buffer
+		GMMVoxelNumSum = GMMVoxelNum.x * GMMVoxelNum.y * GMMVoxelNum.z;
+
+		for (int i = 0; i < photonNumPerFrame; i++) {
+			photonTracingResults.push_back(PhotonTracingResult());
+		}
+		my_buffer->createStaticBuffer(my_device->physicalDevice, my_device->logicalDevice, my_device->graphicsQueue, sizeof(PhotonTracingResult) * photonNumPerFrame, &photonTracingResults);
+
+		uint32_t gmmPerVoxel = 1;
+		for (int i = 0; i < GMMVoxelNumSum * gmmPerVoxel; i++) {
+			gmmParas.push_back(GMMPara());
+		}
+		my_buffer->createStaticBuffer(my_device->physicalDevice, my_device->logicalDevice, my_device->graphicsQueue, sizeof(GMMPara) * GMMVoxelNumSum * gmmPerVoxel, &gmmParas);
+
+#endif // GMM
+
 	}
 
 	void createShadowRenderPass() {
@@ -539,6 +580,10 @@ private:
 
 		uint32_t uniformBufferNumAllLayout = 2;
 		uint32_t storageBufferNumAllLayout = 5;
+#ifdef GMM
+		uniformBufferNumAllLayout = 3;
+		storageBufferNumAllLayout = 7;
+#endif
 		std::vector<uint32_t> textureNumAllLayout = { 1, 2 };
 		std::vector<VkDescriptorType> types = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
 		my_descriptor->createDescriptorPool(uniformBufferNumAllLayout, storageBufferNumAllLayout, types, textureNumAllLayout);
@@ -547,20 +592,25 @@ private:
 		std::vector<VkShaderStageFlagBits> usages = { VK_SHADER_STAGE_ALL };
 		std::vector<VkBuffer> uniformBuffers = { my_buffer->uniformBuffersStatic[0] };
 		std::vector<std::vector<VkBuffer>> uniformBuffersAllSet = { uniformBuffers };
-		std::vector<VkDeviceSize> bufferSize = { sizeof(UniformBufferObject) };
+		std::vector<VkDeviceSize> bufferSize = { sizeof(UniformLightBufferObject) };
 		std::vector<uint32_t> uniformDescriptorCount = { 1 };
 		my_descriptor->descriptorObjects.push_back(my_descriptor->createDescriptorObject(1, 0, &usages, nullptr, 1, &uniformBuffersAllSet, bufferSize, nullptr, nullptr));
 
-		//创造相机uniformDescriptorObject
 		usages = { VK_SHADER_STAGE_COMPUTE_BIT };
+		// 创造相机uniformDescriptorObject
 		uniformBuffers = { my_buffer->uniformBuffers[0] };
-		 uniformBuffersAllSet = { uniformBuffers };
+		uniformBuffersAllSet = { uniformBuffers };
+		bufferSize = { sizeof(UniformBufferObject) };
 		my_descriptor->descriptorObjects.push_back(my_descriptor->createDescriptorObject(1, 0, &usages, nullptr, 1, &uniformBuffersAllSet, bufferSize, nullptr, nullptr));
 
 		//创建computeDescriptorObject
 		DescriptorObject computeDescriptorObject{};
 		VkDescriptorSetLayout computeDescriptorSetLayout;
+#ifdef GMM
+		std::array<VkDescriptorSetLayoutBinding, 9> layoutBindings{};
+#else
 		std::array<VkDescriptorSetLayoutBinding, 6> layoutBindings{};
+#endif
 		layoutBindings[0].binding = 0;
 		layoutBindings[0].descriptorCount = 1;
 		layoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -597,6 +647,31 @@ private:
 		layoutBindings[5].pImmutableSamplers = nullptr;
 		layoutBindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
+#ifdef GMM
+
+		//GMMPConstant
+		layoutBindings[6].binding = 6;
+		layoutBindings[6].descriptorCount = 1;
+		layoutBindings[6].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		layoutBindings[6].pImmutableSamplers = nullptr;
+		layoutBindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		//PhotonTracingResults
+		layoutBindings[7].binding = 7;
+		layoutBindings[7].descriptorCount = 1;
+		layoutBindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		layoutBindings[7].pImmutableSamplers = nullptr;
+		layoutBindings[7].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+		//GMMParaBuffer
+		layoutBindings[8].binding = 8;
+		layoutBindings[8].descriptorCount = 1;
+		layoutBindings[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		layoutBindings[8].pImmutableSamplers = nullptr;
+		layoutBindings[8].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+#endif
+
 		VkDescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		layoutInfo.bindingCount = layoutBindings.size();
@@ -616,7 +691,12 @@ private:
 			throw std::runtime_error("failed to allocate descriptor sets!");
 		}
 
+#ifdef GMM
+		std::array<VkWriteDescriptorSet, 9> descriptorWrites{};
+#else
 		std::array<VkWriteDescriptorSet, 6> descriptorWrites{};
+#endif // GMM
+
 		VkDescriptorBufferInfo bvhArrayNodeBufferInfo{};
 		bvhArrayNodeBufferInfo.buffer = my_buffer->buffersStatic[0];
 		bvhArrayNodeBufferInfo.offset = 0;
@@ -687,6 +767,49 @@ private:
 		descriptorWrites[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 		descriptorWrites[5].descriptorCount = 1;
 		descriptorWrites[5].pImageInfo = &computeImageInfos;
+
+#ifdef GMM
+
+		//GMMConstant
+		VkDescriptorBufferInfo GMMConstantBufferInfo{};
+		GMMConstantBufferInfo.buffer = my_buffer->uniformBuffersStatic[1];
+		GMMConstantBufferInfo.offset = 0;
+		GMMConstantBufferInfo.range = sizeof(GMMConstant);
+		descriptorWrites[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[6].dstSet = computeDescriptorSet;
+		descriptorWrites[6].dstBinding = 6;
+		descriptorWrites[6].dstArrayElement = 0;
+		descriptorWrites[6].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		descriptorWrites[6].descriptorCount = 1;
+		descriptorWrites[6].pBufferInfo = &GMMConstantBufferInfo;
+
+		//PhotonTracingResults
+		VkDescriptorBufferInfo PhotonTracingResultsBufferInfo{};
+		PhotonTracingResultsBufferInfo.buffer = my_buffer->buffersStatic[4];
+		PhotonTracingResultsBufferInfo.offset = 0;
+		PhotonTracingResultsBufferInfo.range = sizeof(PhotonTracingResult) * photonNumPerFrame;
+		descriptorWrites[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[7].dstSet = computeDescriptorSet;
+		descriptorWrites[7].dstBinding = 7;
+		descriptorWrites[7].dstArrayElement = 0;
+		descriptorWrites[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[7].descriptorCount = 1;
+		descriptorWrites[7].pBufferInfo = &PhotonTracingResultsBufferInfo;
+
+		//GMMParaBuffer
+		VkDescriptorBufferInfo GMMParaBufferInfo{};
+		GMMParaBufferInfo.buffer = my_buffer->buffersStatic[5];
+		GMMParaBufferInfo.offset = 0;
+		GMMParaBufferInfo.range = sizeof(GMMPara) * GMMVoxelNumSum * 3;
+		descriptorWrites[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		descriptorWrites[8].dstSet = computeDescriptorSet;
+		descriptorWrites[8].dstBinding = 8;
+		descriptorWrites[8].dstArrayElement = 0;
+		descriptorWrites[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		descriptorWrites[8].descriptorCount = 1;
+		descriptorWrites[8].pBufferInfo = &GMMParaBufferInfo;
+
+#endif
 
 		vkUpdateDescriptorSets(my_device->logicalDevice, descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
 
@@ -980,8 +1103,13 @@ private:
 	}
 
 	void createComputePipeline() {
-		//auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/computeShader.spv");
-		auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/bdptComputeShader.spv");
+#ifdef GMM
+		//auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/GMMPathGuide.spv");
+		auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/GMMPathGuidingVoxel.spv");
+#else
+		auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/computeShader.spv");
+		//auto computeShaderCode = readFile("C:/Users/fangzanbo/Desktop/渲染/rayTracing/pathTracing/pathTracing/shaders/bdptComputeShader.spv");
+#endif // GMM
 
 		VkShaderModule computeShaderModule = createShaderModule(computeShaderCode);
 
@@ -1009,6 +1137,7 @@ private:
 		}
 
 		vkDestroyShaderModule(my_device->logicalDevice, computeShaderModule, nullptr);
+
 	}
 
 	void createSyncObjects() {
@@ -1197,21 +1326,14 @@ private:
 		lastTime = currentTime;
 
 		UniformBufferObject ubo{};
-		ubo.model = glm::mat4(1.0f);// glm::scale(glm::mat4(1.0f), glm::vec3(0.4f, 0.4f, 0.4f));
+		ubo.model = glm::mat4(1.0f);
 		ubo.view = camera.GetViewMatrix();
 		ubo.proj = glm::perspective(glm::radians(45.0f), my_swapChain->swapChainExtent.width / (float)my_swapChain->swapChainExtent.height, 0.1f, 100.0f);
 		//怪不得，我从obj文件中看到场景的顶点是顺时针的，但是在shader中得是逆时针才对，原来是这里proj[1][1]1 *= -1搞的鬼
 		//那我们在计算着色器中处理顶点数据似乎不需要这个啊
 		ubo.proj[1][1] *= -1;
-
-		Light light;
-		light.lightPos_strength = glm::vec4(-0.24f, 1.95f, -0.22f, 50.0f);
-		light.normal= glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
-		light.size = glm::vec4(0.47f, 0.0f, 0.38f, 0.0f);
-		ubo.light = light;
 		ubo.cameraPos = glm::vec4(camera.Position, dis(gen));
 		ubo.randomNumber = glm::vec4(dis(gen), dis(gen), dis(gen), float(frameNum % 1000));
-		//std::cout << ubo.randomNumber.x << " " << ubo.randomNumber.y << std::endl;
 
 		memcpy(my_buffer->uniformBuffersMappeds[0][currentFrame], &ubo, sizeof(ubo));
 
@@ -1311,7 +1433,11 @@ private:
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 1, 1, &my_descriptor->descriptorObjects[1].descriptorSets[currentFrame], 0, nullptr);
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 2, 1, &my_descriptor->descriptorObjects[2].descriptorSets[0], 0, nullptr);
 
+#ifdef GMM
+		vkCmdDispatch(commandBuffer, WIDTH / 16, HEIGHT / 16, 1);
+#else
 		vkCmdDispatch(commandBuffer, WIDTH / 32, HEIGHT / 32, 1);
+#endif // GMM
 
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
 			throw std::runtime_error("failed to record compute command buffer!");

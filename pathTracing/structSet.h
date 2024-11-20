@@ -185,21 +185,21 @@ struct Mesh {
 
 };
 
-
-struct Light {
-	glm::vec4 lightPos_strength;
-	glm::vec4 normal;
-	glm::vec4 size;
-};
-
 struct UniformBufferObject {
 	glm::mat4 model;
 	glm::mat4 view;
 	glm::mat4 proj;
-	//强制对齐，必须是2的倍数
-	Light light;
 	glm::vec4 cameraPos;
 	glm::vec4 randomNumber;
+};
+
+struct UniformLightBufferObject {
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 proj;
+	glm::vec4 lightPos_strength;
+	glm::vec4 normal;
+	glm::vec4 size;
 };
 
 struct DescriptorObject {
@@ -238,6 +238,149 @@ struct ComputeInputMesh {
 	glm::ivec2 indexInIndicesArray;
 	AABBBox AABB;
 	//char padding[4];	//因为material中是vec4，是16字节，所以需要当前ComputeInputMesh是16字节的倍数，这样下一个ComputeInputMesh才能得到正确的值
+
+};
+
+struct GMMConstant {
+
+	glm::vec4 voxelStartPos;
+	glm::ivec4 voxelNum;
+	float voxelSize;
+	uint32_t photonTracingNum;
+
+};
+
+struct GaussianPara {
+
+	glm::vec2 mean;
+	float mixWeight;
+	float padding;
+	glm::mat2 covarianceMatrix;
+
+	GaussianPara() {
+		mixWeight = 0.125f;
+		mean = glm::vec2(0.0f);
+		covarianceMatrix = glm::mat2(1.0f);
+		padding = 0.0;
+	}
+
+};
+
+struct Sufficient_Statistic {
+
+	glm::vec2 ss2;	//高斯分布对该样本的贡献比例乘以样本的位置的乘积之和
+	float ss1;		//高斯分布对每个样本的贡献比例之和
+	float padding;
+	glm::mat2 ss3;	//样本的位置向量与其转置的乘积乘以高斯分布对该样本的贡献比例的乘积之和
+
+	Sufficient_Statistic() {
+		ss1 = 0.0f;
+		ss2 = glm::vec2(0.0f);
+		ss3 = glm::mat2(0.0f);
+		padding = 0.0;
+	}
+
+};
+
+#define GMMVoxel
+
+struct GMMPara {
+
+	float r;	//有效半径
+	float photonAvgWeight;
+	float photonAvgDistance;
+	uint32_t photonNum;
+	uint32_t lastUse;	//上次被使用是几帧前。同理要使用float
+	float padding1;
+	float padding2;
+	float padding3;
+	glm::vec4 pos;		//因为std430中vec3单独（不是数据的元素）传输时，对齐边界为vec4，所以我们在这里传vec4，但是shader中用vec3接收
+	glm::vec4 normal;	//同理
+#ifdef GMMVoxel
+	GaussianPara gaussianParas[8];
+	Sufficient_Statistic SSs[8];
+
+	GMMPara() {
+		pos = glm::vec4(0.0f);
+		normal = glm::vec4(0.0f);
+		for (int i = 0; i < 8; i++) {
+			gaussianParas[i] = GaussianPara();
+			SSs[i] = Sufficient_Statistic();
+		}
+		r = 0.0f;
+		photonAvgWeight = 0.0f;
+		photonAvgDistance = 0.0f;
+		photonNum = 0.0f;
+		lastUse = 100.0f;
+		padding1 = 0.0;
+		padding2 = 0.0;
+		padding3 = 0.0;
+	}
+
+#else
+	GaussianPara gaussianParas[4];
+	Sufficient_Statistic SSs[4];
+
+	GMMPara() {
+		pos = glm::vec4(0.0f);
+		normal = glm::vec4(0.0f);
+		for (int i = 0; i < 4; i++) {
+			gaussianParas[i] = GaussianPara();
+			SSs[i] = Sufficient_Statistic();
+		}
+		r = 0.0f;
+		photonAvgWeight = 0.0f;
+		photonAvgDistance = 0.0f;
+		photonNum = 0.0f;
+		lastUse = 100.0f;
+		padding1 = 0.0;
+		padding2 = 0.0;
+		padding3 = 0.0;
+	}
+
+#endif
+
+};
+
+struct Photon {
+
+	glm::vec2 direction;	//将三维方向转为2维方向，同心圆映射
+	float weight;	//亮度 = 0.299f * R + 0.587f * G + 0.114f * B
+	float padding1;
+	glm::vec4 direction_3D;
+	glm::vec4 normal;
+	glm::vec4 hitPos;
+	glm::vec4 startPos;
+
+	Photon() {
+		padding1 = 0.0f;
+		hitPos = glm::vec4(0.0f);
+		startPos = glm::vec4(0.0f);
+		normal = glm::vec4(0.0f);
+		direction_3D = glm::vec4(0.0f);
+		direction = glm::vec2(0.0f);
+		weight = 0.0f;
+	}
+
+};
+
+//其实不需要关心布局，因为我们传的都是0，具体数据是在shader中修改的
+struct PhotonTracingResult {
+	uint32_t photonNum;
+	float padding1;
+	float padding2;
+	float padding3;
+	Photon photons[10];
+
+	PhotonTracingResult() {
+		this->photonNum = 0;
+		for (int i = 0; i < 10; i++) {
+			photons[0] = Photon();
+		}
+		padding1 = 0.0f;
+		padding2 = 0.0f;
+		padding3 = 0.0f;
+	}
 
 };
 

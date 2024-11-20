@@ -10,11 +10,6 @@ struct Vertex {
 	vec4 normal;
 };
 
-struct Light {
-	vec4 lightPos_strength;
-	vec4 normal;
-	vec4 size;
-};
 float lightA;
 vec3 lightStrength = vec3(27.0f, 22.0f, 14.0f);
 
@@ -60,19 +55,19 @@ layout(set = 0, binding = 0) uniform LightUniformBufferObject {
 	mat4 model;
 	mat4 view;
 	mat4 proj;
-	Light light;
-	vec4 cameraPos;
-	vec4 randomNumber;
+	vec4 lightPos_strength;
+	vec4 normal;
+	vec4 size;
 } lubo;
 
 layout(set = 1, binding = 0) uniform cameraUniformBufferObject {
 	mat4 model;
 	mat4 view;
 	mat4 proj;
-	Light light;
 	vec4 cameraPos;
 	vec4 randomNumber;	//xyz是随机数，而w是帧数
 } cubo;
+
 layout(set = 2, binding = 0, std430) readonly buffer BvhArray{
 	BvhArrayNode bvhArrayNode[];
 };
@@ -158,8 +153,8 @@ Ray makeStartRayFromLight(inout uint randomNumberSeed, inout float pdf){
 
 	Ray ray;
 	vec3 randomNumber = vec3(rand(randomNumberSeed), rand(randomNumberSeed), rand(randomNumberSeed)) * 2.0f - 1.0f;
-	ray.startPos = lubo.light.lightPos_strength.xyz + randomNumber * lubo.light.size.xyz;
-	ray.normal = lubo.light.normal.xyz;
+	ray.startPos = lubo.lightPos_strength.xyz + randomNumber * lubo.size.xyz;
+	ray.normal = lubo.normal.xyz;
 
 	vec2 randomNumberH = Hammersley(uint(rand(randomNumberSeed) * 100), 100);
 	float phi = 2.0 * PI * randomNumberH.x;
@@ -763,12 +758,12 @@ int makeSubCameraPath(Ray ray, inout uint randomNumberSeed){
 void main(){
 
 	vec3 radiance = vec3(0.0f);
-	int sppNum = 1;
+	int sppNum = 20;
 	vec2 texelSize = 1.0f / (gl_WorkGroupSize * gl_NumWorkGroups).xy;
 	//uint randomNumber = uint(cubo.randomNumber.w + gl_GlobalInvocationID + cubo.randomNumber.x) % 1000;
 
 	//不是，这个灯泡这么小？太亮了
-	lightA = 1;		//lubo.light.size.x * lubo.light.size.z;
+	lightA = 1;		//lubo.size.x * lubo.size.z;
 
 	for(int spp = 0; spp < sppNum; spp++){
 	
