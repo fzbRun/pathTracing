@@ -1148,7 +1148,7 @@ vec3 getRadianceFromLight(vec3 startPos, vec3 hitPos, vec3 normal, Material mate
 	float diff_fr = 1 / (2 * PI);
 
 	vec3 albedo = material.kd.rgb;
-	float roughness = material.bxdfPara.x;
+	float roughness = clamp(material.bxdfPara.x, 0.1f, 1.0f);
 	float metallic = material.bxdfPara.y;
 	float refractivity = material.bxdfPara.z;
 
@@ -1179,9 +1179,9 @@ vec3 getRadianceFromLight(vec3 startPos, vec3 hitPos, vec3 normal, Material mate
 
 			vec3 ks = F;
 			vec3 kd = vec3(1.0) - ks;
-			kd *= 1.0 - metallic;  
+			kd *= (1.0 - metallic) * material.bxdfPara.x;  
 
-			radiance += (kd * albedo * diff_fr + ks * spec_fr) * Li * other / pdf * getShadow(hitPos, lightPointPos);
+			radiance += (kd * albedo * diff_fr + spec_fr) * Li * other / pdf * getShadow(hitPos, lightPointPos);
 
 		}
 	}
