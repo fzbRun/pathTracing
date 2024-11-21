@@ -462,7 +462,7 @@ vec3 getFr(vec3 startPos, vec3 currentPos, vec3 currentNormal, vec3 hitPos, Mate
 
 	vec3 ks = F;
 	vec3 kd = vec3(1.0) - ks;
-	kd *= 1.0 - metallic;
+	kd *= (1.0 - metallic) * material.bxdfPara.x;
 
 	return kd * albedo * diff_fr + spec_fr;
 

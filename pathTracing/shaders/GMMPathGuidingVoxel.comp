@@ -848,7 +848,7 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0)
 vec3 getFr(vec3 startPos, vec3 currentPos, vec3 currentNormal, vec3 hitPos, Material material){
 
 	vec3 albedo = material.kd.rgb;
-	float roughness = material.bxdfPara.x;
+	float roughness = clamp(material.bxdfPara.x, 0.1f, 1.0f);
 	float metallic = material.bxdfPara.y;
 	float refractivity = material.bxdfPara.z;
 
@@ -870,7 +870,7 @@ vec3 getFr(vec3 startPos, vec3 currentPos, vec3 currentNormal, vec3 hitPos, Mate
 
 	vec3 ks = F;
 	vec3 kd = vec3(1.0) - ks;
-	kd *= 1.0 - metallic;
+	kd *= (1.0 - metallic) * material.bxdfPara.x;
 
 	return kd * albedo * diff_fr + spec_fr;
 
@@ -1207,6 +1207,7 @@ vec3 pathTracing(Ray ray, uint randomNumberSeed, int type, inout float pdfSum){
 	vec3 normal;
 	mat3 TBN = mat3(1.0f);
 	vec3 hitPos = vec3(1.0f);
+	Material lastMaterial;
 	Material material;
 	float pdf = 1.0f;
 	float bxdfPdf = 1.0f;
@@ -1298,12 +1299,13 @@ vec3 pathTracing(Ray ray, uint randomNumberSeed, int type, inout float pdfSum){
 		int vertexIndex = result.y;
 		hitPos = ray.startPos + ray.depth * ray.direction;
 		getHitPointNormalAndTBN(vertexIndex, normal, TBN);		//计算面法线
+		lastMaterial = material;
 		material = meshs[meshIndex].material;
 
 		vec3 lightRadiance = getRadianceFromLight(ray.startPos, hitPos, normal, material);	//发过来的radiance
 		vec3 hitPointEmission = getRadianceFromHitPoint(material, ray.startPos, hitPos, normal);
 		vec3 irradiance = lightRadiance + hitPointEmission;
-		weight *= getFr(lastHitPos, ray.startPos, ray.normal, hitPos, material) * max(dot(ray.direction, ray.normal), 0.0f) / pdf / RR;
+		weight *= getFr(lastHitPos, ray.startPos, ray.normal, hitPos, lastMaterial) * max(dot(ray.direction, ray.normal), 0.0f) / pdf / RR;
 		radiance += irradiance * weight;
 
 		randomNumberSeed++;
