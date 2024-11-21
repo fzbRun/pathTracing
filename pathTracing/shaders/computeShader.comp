@@ -427,7 +427,7 @@ vec3 getWeight(vec3 startPos, vec3 currentPos, vec3 currentNormal, vec3 hitPos, 
 	vec3 kd = vec3(1.0) - ks;
 	kd *= 1.0 - metallic;
 
-	return (kd * albedo * diff_fr + ks * spec_fr) * cosTheta;
+	return (kd * albedo * diff_fr + spec_fr) * cosTheta;
 
 }
 
