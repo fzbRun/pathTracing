@@ -282,7 +282,7 @@ struct Sufficient_Statistic {
 
 };
 
-#define GMMVoxel
+//#define GMMVoxel
 
 struct GMMPara {
 
